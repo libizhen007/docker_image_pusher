@@ -5,8 +5,8 @@
 #jenkins/jenkins:lts-jdk17
 
 
-postgres:16.6
-
+#postgres:16.6
+postgis/postgis:16-master
 
 
 
