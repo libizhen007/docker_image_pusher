@@ -6,7 +6,8 @@
 
 
 #postgres:16.6
-postgis/postgis:16-master
+#postgis/postgis:16-master
+chezearthdnl/postgis-repmgr:17-3.5-5.5-timescaledb-latest
 
 
 
