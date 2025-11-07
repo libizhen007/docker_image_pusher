@@ -10,8 +10,8 @@
 #chezearthdnl/postgis-repmgr:17-3.5-5.5-timescaledb-latest
 
 
-elasticsearch:8.15.3
-openjdk:8-jdk
+#elasticsearch:8.15.3
+openjdk:8u102-jdk
 
 
 #ghcr.io/geocompx/docker:qgis
