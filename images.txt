@@ -12,7 +12,8 @@
 
 #elasticsearch:8.15.3
 #openjdk:8u102-jdk
-mysql:8.0
+#mysql:8.0
+tduckcloud/tduck-platform:latest
 
 
 #ghcr.io/geocompx/docker:qgis
