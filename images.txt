@@ -2,6 +2,8 @@
 #支持私库
 
 
+magicianmoon/kettle:2024-06-18
+
 #jenkins/jenkins:lts-jdk17
 
 
@@ -14,7 +16,7 @@
 #openjdk:8u102-jdk
 #mysql:8.0
 #tduckcloud/tduck-platform:latest
-mysql:8.0.36
+#mysql:8.0.36
 
 
 #ghcr.io/geocompx/docker:qgis
