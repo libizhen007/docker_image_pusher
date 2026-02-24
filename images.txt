@@ -1,6 +1,7 @@
 #nginx
 #支持私库
 
---platform linux/arm64 imresamu/postgis:16-3.6
+#--platform linux/arm64 imresamu/postgis:16-3.6
+--platform linux/arm64 congcong126/kettle-pdi-ce:10.2.0.0-222
 #支持指定架构
 #--platform=x86_64 ghcr.io/geocompx/docker:qgis
