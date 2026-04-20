@@ -15,7 +15,7 @@
 #eclipse-mosquitto:2.1.2-alpine
 
 
-mineru:latest
+dockurr/windows:5.14
 
 
 #支持指定架构
