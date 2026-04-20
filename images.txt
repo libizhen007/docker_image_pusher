@@ -12,7 +12,11 @@
 
 #--platform linux/arm64 kafbat/kafka-ui:main
 
-eclipse-mosquitto:2.1.2-alpine
+#eclipse-mosquitto:2.1.2-alpine
+
+
+mineru:latest
+
 
 #支持指定架构
 #--platform=x86_64 ghcr.io/geocompx/docker:qgis
