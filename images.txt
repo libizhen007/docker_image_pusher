@@ -14,8 +14,7 @@
 
 #eclipse-mosquitto:2.1.2-alpine
 
-
-dockurr/windows:5.14
+agoracn/token:0.1.2023053011
 
 
 #支持指定架构
