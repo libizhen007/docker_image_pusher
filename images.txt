@@ -1,7 +1,9 @@
 #nginx
 #支持私库
 
-rustfs/rustfs:1.0.0-beta.8
+browserless/chrome
+diygod/rsshub
+redis:alpine
 
 
 #支持指定架构
