@@ -1,7 +1,6 @@
 #nginx
 #支持私库
 
-#astral/uv:python3.12-trixie
-node:20-slim
+node:20-alpine
 #支持指定架构
 #--platform=x86_64 ghcr.io/geocompx/docker:qgis
