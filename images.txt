@@ -1,7 +1,7 @@
 #nginx
 #支持私库
 
-gotenberg:9.10.1
+gotenberg/gotenberg:9.10.1
 
 
 #支持指定架构
