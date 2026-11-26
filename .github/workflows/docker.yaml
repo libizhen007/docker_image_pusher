@@ -1,79 +1,215 @@
 
-name: Docker
+name: Docker Image Pusher
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 env:
-  ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
-  ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
-  ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
-  ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
+  ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+  ALIYUN_NAME_SPACE: ${{ secrets.ALIYUN_NAME_SPACE }}
+  ALIYUN_REGISTRY_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
+  ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
 jobs:
   build:
-    name: Pull
+    name: Pull and Push Docker Images
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      # 1. 查看初始磁盘
-      - name: Before freeing disk space
-        run: |
-          df -hT
-          lsblk
 
-      # 2. 扩容 Runner 可用空间
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+      # ============================================================
+      # 1. 扩容前检查
+      # ============================================================
+
+      - name: Disk Space Before
+        run: |
+          echo "========== Disk Space Before =========="
+          df -hT
+          echo
+          df -i
+          echo
+          free -h
+          echo "======================================="
+
+      # ============================================================
+      # 2. 清理 Docker 预装镜像
+      # ============================================================
+
+      - name: Cleanup Preinstalled Docker Images
+        run: |
+          set -e
+
+          echo "========== Docker Disk Usage =========="
+          docker system df || true
+
+          echo "Cleaning unused Docker images..."
+          docker image prune -af || true
+
+          echo "Cleaning Docker build cache..."
+          docker builder prune -af || true
+
+          echo "========== After Cleanup =============="
+          docker system df || true
+          df -hT
+
+      # ============================================================
+      # 3. 停止 Docker 和 containerd
+      # ============================================================
+
+      - name: Stop Docker Services
+        run: |
+          set -e
+
+          sudo systemctl stop docker.service || true
+          sudo systemctl stop docker.socket || true
+          sudo systemctl stop containerd.service || true
+
+          echo "Docker status:"
+          sudo systemctl is-active docker.service || true
+
+          echo "Containerd status:"
+          sudo systemctl is-active containerd.service || true
+
+      # ============================================================
+      # 4. 扩容磁盘
+      #
+      # Docker 29 使用 containerd image store 时，
+      # 镜像层和快照数据主要位于 /var/lib/containerd。
+      #
+      # 将扩容后的 LVM 文件系统直接挂载到该目录。
+      # ============================================================
+
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@v10
         with:
           root-reserve-mb: 1024
+          temp-reserve-mb: 100
           swap-size-mb: 128
+
           remove-dotnet: 'true'
           remove-haskell: 'true'
           remove-android: 'true'
           remove-codeql: 'true'
-          build-mount-path: '/var/lib/docker/'
 
-      # 3. 重启 Docker
-      - name: Restart Docker
+          # 已经在前一步清理 Docker 镜像
+          # 此处 Docker 已停止，因此不要再执行 prune
+          remove-docker-images: 'false'
+
+          # Docker 29 containerd 镜像存储目录
+          build-mount-path: /var/lib/containerd/
+
+          # containerd 必须能够以 root 身份写入
+          build-mount-path-ownership: root:root
+
+          overprovision-lvm: 'false'
+
+      # ============================================================
+      # 5. 重新启动 Docker
+      # ============================================================
+
+      - name: Restart Docker Services
         run: |
-          sudo service docker restart
-          docker info
-          df -hT
+          set -e
 
-      # 4. Checkout
+          sudo systemctl start containerd.service
+          sudo systemctl start docker.service
+
+          echo "Waiting for Docker..."
+          for i in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+
+          docker info
+
+      # ============================================================
+      # 6. 检查扩容结果
+      # ============================================================
+
+      - name: Verify Disk Space
+        run: |
+          echo "========== Disk Space After =========="
+
+          echo "Root filesystem:"
+          df -hT /
+
+          echo "Containerd filesystem:"
+          df -hT /var/lib/containerd
+
+          echo "Docker filesystem:"
+          df -hT /var/lib/docker
+
+          echo "Containerd inode:"
+          df -i /var/lib/containerd
+
+          echo "Mount information:"
+          findmnt /var/lib/containerd || true
+
+          echo "Docker storage:"
+          docker info --format \
+            'DockerRootDir={{.DockerRootDir}}'
+
+          docker system df
+
+          echo "======================================"
+
+      # ============================================================
+      # 7. 拉取代码
+      # ============================================================
+
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      # 5. 登录阿里云
-      - name: Docker Login
+      # ============================================================
+      # 8. 登录阿里云镜像仓库
+      # ============================================================
+
+      - name: Login Aliyun Registry
         run: |
+          set -e
+
           echo "$ALIYUN_REGISTRY_PASSWORD" | \
             docker login "$ALIYUN_REGISTRY" \
-            -u "$ALIYUN_REGISTRY_USER" \
-            --password-stdin
+              --username "$ALIYUN_REGISTRY_USER" \
+              --password-stdin
 
-      # 6. 镜像处理
+      # ============================================================
+      # 9. 拉取、重命名、推送镜像
+      # ============================================================
+
       - name: Pull and Push Images
         shell: bash
         run: |
           set -euo pipefail
 
-          # 统计磁盘
+          # --------------------------------------------------------
+          # 磁盘使用情况
+          # --------------------------------------------------------
+
           show_disk() {
+            echo
             echo "========== Disk Usage =========="
-            df -hT
+            df -hT /var/lib/containerd
             docker system df || true
             echo "================================"
+            echo
           }
 
-          # 清理当前镜像及无用镜像层
+          # --------------------------------------------------------
+          # 清理镜像
+          # --------------------------------------------------------
+
           cleanup_docker() {
-            echo "开始清理 Docker 空间"
+            echo "Cleaning Docker..."
 
             docker image prune -af || true
             docker builder prune -af || true
@@ -81,91 +217,208 @@ jobs:
             show_disk
           }
 
-          show_disk
+          # --------------------------------------------------------
+          # 解析 images.txt
+          #
+          # 支持：
+          # nginx:latest
+          # --platform linux/amd64 nginx:latest
+          # --platform=linux/amd64 nginx:latest
+          # --------------------------------------------------------
 
-          declare -A duplicate_images
-          declare -A temp_map
+          parse_image_line() {
+            local line="$1"
+            local -a tokens=()
 
-          # 第一遍：识别重名镜像
-          while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            PARSED_PLATFORM=""
+            PARSED_IMAGE=""
 
-            image=$(echo "$line" | awk '{print $NF}')
+            read -r -a tokens <<< "$line"
+
+            if [[ ${#tokens[@]} -eq 0 ]]; then
+              return 1
+            fi
+
+            if [[ "${tokens[0]}" == --platform=* ]]; then
+              PARSED_PLATFORM="${tokens[0]#*=}"
+
+            elif [[ "${tokens[0]}" == "--platform" ]]; then
+              PARSED_PLATFORM="${tokens[1]}"
+            fi
+
+            PARSED_IMAGE="${tokens[$((${#tokens[@]} - 1))]}"
+
+            [[ -n "$PARSED_IMAGE" ]]
+          }
+
+          # --------------------------------------------------------
+          # 获取镜像命名空间
+          #
+          # 保留原有命名规则：
+          # registry/namespace/image:tag
+          # namespace/image:tag
+          # image:tag
+          # --------------------------------------------------------
+
+          get_namespace() {
+            local image="$1"
+
+            echo "$image" | awk -F'/' '{
+              if (NF == 3) {
+                print $2
+              } else if (NF == 2) {
+                print $1
+              } else {
+                print ""
+              }
+            }'
+          }
+
+          # --------------------------------------------------------
+          # 获取镜像名称
+          # --------------------------------------------------------
+
+          get_image_name() {
+            local image="$1"
+
             image="${image%%@*}"
+            image="${image##*/}"
+            image="${image%%:*}"
 
-            image_name_tag="${image##*/}"
-            name_space=$(echo "$image" | awk -F'/' \
-              '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
+            echo "$image"
+          }
 
-            name_space="${name_space}_"
-            image_name="${image_name_tag%%:*}"
+          # --------------------------------------------------------
+          # 第一次遍历：检测不同命名空间下的同名镜像
+          # --------------------------------------------------------
+
+          declare -A duplicate_images=()
+          declare -A temp_map=()
+
+          echo "========== Checking Duplicate Images =========="
+
+          while IFS= read -r line || [[ -n "$line" ]]; do
+
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+            parse_image_line "$line" || continue
+
+            image="$PARSED_IMAGE"
+
+            image_name=$(get_image_name "$image")
+            namespace=$(get_namespace "$image")
+            namespace="${namespace}_"
 
             if [[ -n "${temp_map[$image_name]:-}" ]]; then
-              if [[ "${temp_map[$image_name]}" != "$name_space" ]]; then
-                echo "duplicate image name: $image_name"
-                duplicate_images[$image_name]="true"
+
+              if [[ "${temp_map[$image_name]}" != "$namespace" ]]; then
+
+                echo "Duplicate image name: $image_name"
+
+                duplicate_images["$image_name"]="true"
               fi
+
             else
-              temp_map[$image_name]="$name_space"
+
+              temp_map["$image_name"]="$namespace"
+
             fi
 
           done < images.txt
 
-          # 第二遍：逐个拉取、推送、清理
+          echo "========== Duplicate Check Complete =========="
+
+          # --------------------------------------------------------
+          # 第二次遍历：拉取、打标签、推送
+          # --------------------------------------------------------
+
           while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
 
-            echo "处理镜像: $line"
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
-            image=$(echo "$line" | awk '{print $NF}')
-            platform=$(echo "$line" | awk -F'--platform[ =]' \
-              '{if (NF>1) print $2}' | awk '{print $1}')
+            parse_image_line "$line" || continue
 
-            # Pull
-            docker pull $line
+            image="$PARSED_IMAGE"
+            platform="$PARSED_PLATFORM"
 
-            if [[ -z "$platform" ]]; then
-              platform_prefix=""
-            else
+            echo
+            echo "================================================"
+            echo "Source image: $image"
+            echo "Platform: ${platform:-default}"
+            echo "================================================"
+
+            # 1. 拉取镜像
+
+            echo "Pulling image..."
+
+            if [[ -n "$platform" ]]; then
+              docker pull --platform "$platform" "$image"
               platform_prefix="${platform//\//_}_"
+            else
+              docker pull "$image"
+              platform_prefix=""
             fi
+
+            # 2. 解析镜像信息
 
             image_name_tag="${image##*/}"
-
-            name_space=$(echo "$image" | awk -F'/' \
-              '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
-
-            image_name="${image_name_tag%%:*}"
-
-            name_space_prefix=""
-            if [[ -n "${duplicate_images[$image_name]:-}" ]]; then
-              if [[ -n "$name_space" ]]; then
-                name_space_prefix="${name_space}_"
-              fi
-            fi
-
             image_name_tag="${image_name_tag%%@*}"
 
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
+            namespace=$(get_namespace "$image")
+            image_name="${image_name_tag%%:*}"
 
-            # Tag
+            # 3. 检查是否需要添加 namespace 前缀
+
+            namespace_prefix=""
+
+            if [[ -n "${duplicate_images[$image_name]:-}" ]]; then
+
+              if [[ -n "$namespace" ]]; then
+                namespace_prefix="${namespace}_"
+              fi
+
+            fi
+
+            # 4. 生成阿里云目标镜像地址
+
+            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/${platform_prefix}${namespace_prefix}${image_name_tag}"
+
+            echo "Target image: $new_image"
+
+            # 5. 打标签
+
             docker tag "$image" "$new_image"
 
-            # Push
+            # 6. 推送
+
+            echo "Pushing image..."
+
             docker push "$new_image"
 
-            echo "推送成功: $new_image"
+            echo "Push completed: $new_image"
 
-            # 删除本地标签
+            # 7. 删除当前镜像，释放磁盘
+
+            echo "Removing source and target images..."
+
             docker image rm "$image" "$new_image" || true
 
-            # 清理未使用的镜像层
-            cleanup_docker
+            # 8. 清理无用镜像层
+
+            docker image prune -af || true
+
+            show_disk
 
           done < images.txt
 
+          # --------------------------------------------------------
           # 最终清理
-          docker logout "$ALIYUN_REGISTRY" || true
+          # --------------------------------------------------------
+
+          echo "========== Final Cleanup =========="
+
           cleanup_docker
 
-          echo "所有镜像处理完成"
+          echo "All images processed successfully."
